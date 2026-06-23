@@ -18,20 +18,57 @@ class MultiCreatorApp:
         self.profile_gen = ProfileGenerator()
         self.stats = {"success": 0, "failed": 0}
         self._lock = threading.Lock()
+        self._running = True
 
-    def get_mail_with_web_access(self, proxy=None):
+    def get_mail_with_web_access(self, proxy=None, retries=3):
         """Использование Mail.tm (есть веб-интерфейс на https://mail.tm)"""
-        proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-        try:
-            res = requests.get("https://api.mail.tm/domains", proxies=proxies, timeout=10).json()
-            domain = random.choice(res['hydra:member'])['domain']
-            email = f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}@{domain}"
-            pwd = "Pass" + "".join(random.choices(string.digits, k=6)) + "!"
-            res = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": pwd}, proxies=proxies, timeout=15)
-            if res.status_code == 201:
-                return email, pwd
-        except Exception as e:
-            print(f"[-] Ошибка при получении почты: {e}")
+        for attempt in range(retries):
+            try:
+                proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
+                
+                # Получение доменов
+                res = requests.get(
+                    "https://api.mail.tm/domains", 
+                    proxies=proxies, 
+                    timeout=10
+                )
+                res.raise_for_status()
+                domains = res.json()
+                
+                if 'hydra:member' not in domains or not domains['hydra:member']:
+                    return None, None
+                
+                domain = random.choice(domains['hydra:member'])['domain']
+                email = f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}@{domain}"
+                pwd = "Pass" + "".join(random.choices(string.digits, k=6)) + "!"
+                
+                # Создание аккаунта
+                res = requests.post(
+                    "https://api.mail.tm/accounts", 
+                    json={"address": email, "password": pwd}, 
+                    proxies=proxies, 
+                    timeout=15
+                )
+                
+                if res.status_code == 201:
+                    return email, pwd
+                    
+            except requests.exceptions.Timeout:
+                if attempt < retries - 1:
+                    time.sleep(2)
+                    continue
+            except requests.exceptions.ProxyError as e:
+                if attempt < retries - 1:
+                    time.sleep(3)
+                    continue
+            except requests.exceptions.ConnectionError:
+                if attempt < retries - 1:
+                    time.sleep(2)
+                    continue
+            except Exception as e:
+                if attempt == retries - 1:
+                    pass  # Логирование опционально
+        
         return None, None
 
     def create_business_manager(self, token, profile, proxy=None):
@@ -79,9 +116,20 @@ class MultiCreatorApp:
         return False
 
     def worker(self, geo, platforms, manager, use_proxy, create_biz, tm):
+        if not self._running:
+            tm.update(1)
+            return
+            
         proxy = self.proxy_mgr.get_proxy(geo) if use_proxy else None
         profile = self.profile_gen.generate_profile(geo, random.choice(["M", "F"]))
-        email, email_pwd = self.get_mail_with_web_access(proxy)
+        
+        # Повторные попытки получить почту
+        email, email_pwd = None, None
+        for attempt in range(3):
+            email, email_pwd = self.get_mail_with_web_access(proxy, retries=2)
+            if email:
+                break
+            time.sleep(1)
         
         if not email:
             tm.update(1)
@@ -117,13 +165,34 @@ class MultiCreatorApp:
         manager = MultiAccountManager(geo, count)
         num_threads = min(count, 10)
 
-        with tqdm(total=count, desc="Процесс") as tm:
-            with ThreadPoolExecutor(max_workers=num_threads) as executor:
-                for _ in range(count):
-                    executor.submit(self.worker, geo, target_platforms, manager, use_proxy, create_biz, tm)
-
-        print(f"\nЗавершено! Результаты в файле: {manager.filename}")
-        print(f"Успешно: {self.stats['success']}, Ошибки: {self.stats['failed']}")
+        try:
+            with tqdm(total=count, desc="Процесс") as tm:
+                with ThreadPoolExecutor(max_workers=num_threads) as executor:
+                    futures = []
+                    for _ in range(count):
+                        if not self._running:
+                            break
+                        future = executor.submit(self.worker, geo, target_platforms, manager, use_proxy, create_biz, tm)
+                        futures.append(future)
+                    
+                    # Ожидание завершения всех потоков
+                    for future in futures:
+                        try:
+                            future.result()
+                        except Exception as e:
+                            tm.update(1)
+        
+        except KeyboardInterrupt:
+            self._running = False
+            print("\n[!] Остановка... Пожалуйста подождите...")
+            time.sleep(2)
+        
+        except Exception as e:
+            print(f"\n[!] Ошибка: {e}")
+        
+        finally:
+            print(f"\nЗавершено! Результаты в файле: {manager.filename}")
+            print(f"Успешно: {self.stats['success']}, Ошибки: {self.stats['failed']}")
 
 if __name__ == "__main__":
     app = MultiCreatorApp()
