@@ -1,0 +1,5 @@
+requests
+faker
+tqdm
+openpyxl
+pyotp
