@@ -5,8 +5,8 @@ pyotp==2.9.0
 flask==3.0.0
 flask-cors==4.0.0
 tqdm==4.66.1
-sqlite3-python==1.0.0
-proxies==0.0.8
+# sqlite3 ships with the Python standard library — no install needed.
+# proxies==0.0.8 is not published on PyPI; if needed, use requests[socks] (already pinned).
 requests[socks]==2.31.0
 cryptography==41.0.7
 python-dotenv==1.0.0

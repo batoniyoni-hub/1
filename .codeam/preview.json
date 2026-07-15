@@ -1,0 +1,15 @@
+{
+  "framework": "Flask",
+  "command": "python",
+  "args": [
+    "api_dashboard.py"
+  ],
+  "port": 5000,
+  "ready_pattern": "(API Server running|Running on http)",
+  "env": {
+    "HOST": "0.0.0.0",
+    "FLASK_APP": "api_dashboard.py"
+  },
+  "setup_commands": [],
+  "notes": null
+}

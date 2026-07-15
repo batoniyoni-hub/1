@@ -3,3 +3,10 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# Local environment overrides (use .env.example as the committed template)
+.env
+
+# Python bytecode
+__pycache__/
+*.pyc

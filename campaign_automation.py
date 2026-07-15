@@ -2,13 +2,14 @@
 import threading
 import time
 import random
+import sqlite3
 import requests
 import json
+import queue
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 from account_database import AccountDatabase
-import queue
 
 class ActionType:
     """Типы действий для кампаний"""
@@ -83,7 +84,8 @@ class CampaignAutomation:
                 if acc.get('trust_score', 0) >= min_trust_score
             ]
             
-            account_ids = [acc['id'] for acc in filtered_accounts[:limit] if limit else filtered_accounts]
+            source = filtered_accounts[:limit] if limit else filtered_accounts
+            account_ids = [acc['id'] for acc in source]
             
             if self.db.assign_accounts_to_campaign(campaign_id, account_ids):
                 print(f"[+] Назначено {len(account_ids)} аккаунтов на кампанию {campaign_id}")
@@ -470,6 +472,3 @@ class InteractionEngine:
             print(f"[-] Ошибка получения статистики: {e}")
         return {}
 
-
-# Импорт sqlite3 для использования в модуле
-import sqlite3
