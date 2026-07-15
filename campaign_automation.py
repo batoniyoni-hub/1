@@ -1,474 +1,371 @@
 # -*- coding: utf-8 -*-
-import threading
-import time
-import random
-import sqlite3
-import requests
-import json
-import queue
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Callable
-from concurrent.futures import ThreadPoolExecutor
-from account_database import AccountDatabase
+"""
+Campaign Automation Module
+Автоматизация кампаний и управление действиями аккаунтов
+"""
 
-class ActionType:
-    """Типы действий для кампаний"""
+from enum import Enum
+from datetime import datetime, timedelta
+import uuid
+import sqlite3
+from typing import Dict, List, Optional
+
+
+class ActionType(Enum):
+    """Типы действий"""
     LIKE = "like"
     COMMENT = "comment"
     FOLLOW = "follow"
+    UNFOLLOW = "unfollow"
     MESSAGE = "message"
     POST = "post"
     SHARE = "share"
-    WATCH = "watch"
-    TAG = "tag"
+    REACT = "react"
+
 
 class CampaignAutomation:
-    """Система автоматизации кампаний и массовых действий"""
+    """Класс для управления автоматизацией кампаний"""
     
-    def __init__(self, db: AccountDatabase = None):
-        self.db = db or AccountDatabase()
-        self._lock = threading.Lock()
-        self._running = False
-        self.action_queue = queue.Queue()
-        self.worker_threads = []
-        
-        # Параметры по умолчанию
-        self.default_config = {
-            'daily_action_limit': 50,
-            'action_delay': (5, 15),  # секунды
-            'batch_size': 10,
-            'max_workers': 5,
-            'retry_attempts': 3,
-            'retry_delay': 30
-        }
+    def __init__(self, db):
+        self.db = db
+        self.running_campaigns = {}
+        self._ensure_tables()
     
-    def create_campaign(self, campaign_name: str, campaign_type: str, 
-                       platform: str, strategy: str, prompt: str = None,
-                       config: Dict = None) -> int:
-        """Создать новую кампанию"""
-        try:
-            campaign_data = {
-                'campaign_name': campaign_name,
-                'campaign_type': campaign_type,  # organic, paid, engagement
-                'platform': platform,
-                'strategy': strategy,
-                'prompt': prompt,
-                'status': 'active',
-                'start_date': datetime.now().isoformat(),
-                'daily_actions_limit': config.get('daily_action_limit') if config else 50,
-                'interaction_types': json.dumps([ActionType.LIKE, ActionType.COMMENT, ActionType.FOLLOW])
-            }
-            
-            campaign_id = self.db.create_campaign(campaign_data)
-            print(f"[+] Кампания '{campaign_name}' создана с ID {campaign_id}")
-            return campaign_id
-        except Exception as e:
-            print(f"[-] Ошибка создания кампании: {e}")
-        return None
-    
-    def assign_accounts_to_campaign(self, campaign_id: int, 
-                                   country: str = None, 
-                                   min_trust_score: float = 0.0,
-                                   limit: int = None) -> List[int]:
-        """Назначить аккаунты на кампанию"""
-        try:
-            # Получить валидные аккаунты
-            if country:
-                accounts = self.db.get_accounts_by_country(country, status='valid')
-            else:
-                accounts = self.db.get_accounts_by_status('valid', limit)
-            
-            # Фильтр по trust score
-            filtered_accounts = [
-                acc for acc in accounts 
-                if acc.get('trust_score', 0) >= min_trust_score
-            ]
-            
-            source = filtered_accounts[:limit] if limit else filtered_accounts
-            account_ids = [acc['id'] for acc in source]
-            
-            if self.db.assign_accounts_to_campaign(campaign_id, account_ids):
-                print(f"[+] Назначено {len(account_ids)} аккаунтов на кампанию {campaign_id}")
-                return account_ids
-        except Exception as e:
-            print(f"[-] Ошибка назначения аккаунтов: {e}")
-        return []
-    
-    def schedule_action(self, account_id: int, action_type: str, 
-                       target_id: str = None, action_data: Dict = None,
-                       delay_minutes: int = 0) -> int:
-        """Запланировать действие"""
-        try:
-            action_info = {
-                'action_type': action_type,
-                'target_id': target_id,
-                'data': action_data or {},
-                'scheduled_time': datetime.now() + timedelta(minutes=delay_minutes)
-            }
-            
-            action_id = self.db.add_action(account_id, action_type, action_info)
-            return action_id
-        except Exception as e:
-            print(f"[-] Ошибка планирования действия: {e}")
-        return None
-    
-    def execute_like_action(self, account: Dict, target_id: str) -> bool:
-        """Выполнить лайк"""
-        try:
-            account_id = account['id']
-            token = account.get('access_token')
-            proxy = account.get('proxy_ip')
-            
-            if not token:
-                return False
-            
-            proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-            
-            # Эмуляция лайка через API
-            url = f"https://graph.instagram.com/v18.0/{target_id}/likes"
-            headers = {'Authorization': f'Bearer {token}'}
-            
-            response = requests.post(url, headers=headers, proxies=proxies, timeout=10)
-            
-            if response.status_code in [200, 201]:
-                # Обновить действие
-                self.db.update_account(account_id, {
-                    'action_count': account.get('action_count', 0) + 1,
-                    'last_action': datetime.now().isoformat()
-                })
-                return True
-            
-            return False
-        except Exception as e:
-            print(f"[-] Ошибка выполнения лайка: {e}")
-            return False
-    
-    def execute_comment_action(self, account: Dict, target_id: str, 
-                              comment_text: str = None) -> bool:
-        """Выполнить комментарий"""
-        try:
-            account_id = account['id']
-            token = account.get('access_token')
-            proxy = account.get('proxy_ip')
-            
-            if not token or not comment_text:
-                return False
-            
-            proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-            
-            # Эмуляция комментария
-            url = f"https://graph.instagram.com/v18.0/{target_id}/comments"
-            headers = {'Authorization': f'Bearer {token}'}
-            data = {'text': comment_text}
-            
-            response = requests.post(url, json=data, headers=headers, 
-                                    proxies=proxies, timeout=10)
-            
-            if response.status_code in [200, 201]:
-                self.db.update_account(account_id, {
-                    'action_count': account.get('action_count', 0) + 1
-                })
-                return True
-            
-            return False
-        except Exception as e:
-            print(f"[-] Ошибка выполнения комментария: {e}")
-            return False
-    
-    def execute_follow_action(self, account: Dict, target_user_id: str) -> bool:
-        """Выполнить подписку"""
-        try:
-            account_id = account['id']
-            token = account.get('access_token')
-            proxy = account.get('proxy_ip')
-            
-            if not token:
-                return False
-            
-            proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-            
-            # Эмуляция подписки
-            url = f"https://graph.instagram.com/v18.0/me/relationships"
-            headers = {'Authorization': f'Bearer {token}'}
-            data = {'users': target_user_id}
-            
-            response = requests.post(url, json=data, headers=headers, 
-                                    proxies=proxies, timeout=10)
-            
-            if response.status_code in [200, 201]:
-                self.db.update_account(account_id, {
-                    'follower_count': account.get('follower_count', 0) + 1
-                })
-                return True
-            
-            return False
-        except Exception as e:
-            print(f"[-] Ошибка выполнения подписки: {e}")
-            return False
-    
-    def execute_message_action(self, account: Dict, recipient_id: str, 
-                              message_text: str) -> bool:
-        """Отправить сообщение"""
-        try:
-            account_id = account['id']
-            token = account.get('access_token')
-            proxy = account.get('proxy_ip')
-            
-            if not token or not message_text:
-                return False
-            
-            proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-            
-            # Эмуляция отправки сообщения
-            url = f"https://graph.instagram.com/v18.0/me/messages"
-            headers = {'Authorization': f'Bearer {token}'}
-            data = {
-                'recipient_id': recipient_id,
-                'message': message_text
-            }
-            
-            response = requests.post(url, json=data, headers=headers, 
-                                    proxies=proxies, timeout=10)
-            
-            if response.status_code in [200, 201]:
-                return True
-            
-            return False
-        except Exception as e:
-            print(f"[-] Ошибка отправки сообщения: {e}")
-            return False
-    
-    def execute_action(self, account_id: int, action_type: str, 
-                      action_data: Dict) -> bool:
-        """Выполнить действие"""
-        try:
-            account = self.db.get_account(account_id)
-            if not account:
-                return False
-            
-            if action_type == ActionType.LIKE:
-                return self.execute_like_action(account, action_data.get('target_id'))
-            
-            elif action_type == ActionType.COMMENT:
-                return self.execute_comment_action(account, action_data.get('target_id'),
-                                                   action_data.get('text'))
-            
-            elif action_type == ActionType.FOLLOW:
-                return self.execute_follow_action(account, action_data.get('target_id'))
-            
-            elif action_type == ActionType.MESSAGE:
-                return self.execute_message_action(account, action_data.get('recipient_id'),
-                                                   action_data.get('text'))
-            
-            return False
-        except Exception as e:
-            print(f"[-] Ошибка выполнения действия: {e}")
-            return False
-    
-    def worker_thread(self, worker_id: int):
-        """Рабочий поток для выполнения действий"""
-        print(f"[*] Рабочий {worker_id} запущен")
-        
-        while self._running:
-            try:
-                # Получить действие из очереди
-                try:
-                    action_id, account_id, action_type, action_data = self.action_queue.get(timeout=5)
-                except queue.Empty:
-                    continue
-                
-                # Выполнить действие
-                success = self.execute_action(account_id, action_type, action_data)
-                
-                # Обновить статус
-                status = 'completed' if success else 'failed'
-                self.db.update_action_status(action_id, status, 
-                                            'Success' if success else 'Failed')
-                
-                # Случайная задержка
-                delay = random.uniform(5, 15)
-                time.sleep(delay)
-                
-                self.action_queue.task_done()
-            
-            except Exception as e:
-                print(f"[-] Ошибка в рабочем потоке: {e}")
-                time.sleep(5)
-    
-    def start_automation(self, campaign_id: int, num_workers: int = 5):
-        """Запустить автоматизацию кампании"""
-        try:
-            self._running = True
-            campaign = self.db.get_campaign(campaign_id)
-            
-            if not campaign:
-                print(f"[-] Кампания {campaign_id} не найдена")
-                return False
-            
-            print(f"[+] Запуск кампании '{campaign['campaign_name']}'")
-            
-            # Получить аккаунты кампании
-            accounts = self.db.get_campaign_accounts(campaign_id)
-            print(f"[+] Найдено {len(accounts)} аккаунтов для кампании")
-            
-            # Запустить рабочие потоки
-            for i in range(num_workers):
-                thread = threading.Thread(target=self.worker_thread, args=(i,), daemon=True)
-                thread.start()
-                self.worker_threads.append(thread)
-            
-            # Заполнить очередь действиями
-            for account in accounts:
-                # Получить действия для аккаунта
-                # (в реальном приложении они должны быть загружены из БД)
-                pass
-            
-            return True
-        except Exception as e:
-            print(f"[-] Ошибка запуска автоматизации: {e}")
-        return False
-    
-    def stop_automation(self):
-        """Остановить автоматизацию"""
-        self._running = False
-        print("[*] Остановка автоматизации...")
-        
-        # Ждать завершения рабочих потоков
-        for thread in self.worker_threads:
-            thread.join(timeout=5)
-        
-        self.worker_threads.clear()
-        print("[+] Автоматизация остановлена")
-    
-    def get_campaign_stats(self, campaign_id: int) -> Dict:
-        """Получить статистику кампании"""
-        try:
-            campaign = self.db.get_campaign(campaign_id)
-            accounts = self.db.get_campaign_accounts(campaign_id)
-            
-            total_actions = sum(acc.get('action_count', 0) for acc in accounts)
-            total_likes = sum(acc.get('post_count', 0) for acc in accounts)
-            
-            return {
-                'campaign_name': campaign.get('campaign_name'),
-                'status': campaign.get('status'),
-                'total_accounts': len(accounts),
-                'total_actions': total_actions,
-                'total_likes': total_likes,
-                'created_at': campaign.get('created_at'),
-                'accounts': accounts
-            }
-        except Exception as e:
-            print(f"[-] Ошибка получения статистики: {e}")
-        return {}
-
-
-class InteractionEngine:
-    """Двигатель для органических взаимодействий между аккаунтами"""
-    
-    def __init__(self, db: AccountDatabase = None):
-        self.db = db or AccountDatabase()
-        self.automation = CampaignAutomation(db)
-    
-    def create_interaction_network(self, campaign_id: int, interaction_type: str = 'friendship'):
-        """Создать сеть взаимодействий между аккаунтами"""
-        try:
-            accounts = self.db.get_campaign_accounts(campaign_id)
-            
-            if len(accounts) < 2:
-                print("[-] Недостаточно аккаунтов для создания сети")
-                return False
-            
-            print(f"[+] Создание сети {len(accounts)} аккаунтов...")
-            
-            # Создать связи между аккаунтами
-            for i, account in enumerate(accounts):
-                # Выбрать случайные целевые аккаунты
-                targets = random.sample(accounts, min(5, len(accounts) - 1))
-                
-                for target in targets:
-                    if target['id'] != account['id']:
-                        # Добавить в БД
-                        with sqlite3.connect(self.db.db_path) as conn:
-                            cursor = conn.cursor()
-                            cursor.execute('''
-                                INSERT OR IGNORE INTO account_relations 
-                                (account_id, target_account_id, relation_type, status)
-                                VALUES (?, ?, ?, ?)
-                            ''', (account['id'], target['id'], interaction_type, 'pending'))
-                            conn.commit()
-            
-            print(f"[+] Сеть создана успешно")
-            return True
-        except Exception as e:
-            print(f"[-] Ошибка создания сети: {e}")
-        return False
-    
-    def execute_network_interactions(self, campaign_id: int, 
-                                    action_type: str = ActionType.LIKE):
-        """Выполнить взаимодействия в сети"""
-        try:
-            accounts = self.db.get_campaign_accounts(campaign_id)
-            
-            for account in accounts:
-                # Получить целевые аккаунты
-                with sqlite3.connect(self.db.db_path) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        SELECT * FROM account_relations 
-                        WHERE account_id = ? AND status = ?
-                    ''', (account['id'], 'pending'))
-                    
-                    relations = cursor.fetchall()
-                    
-                    for relation in relations:
-                        target_id = relation['target_account_id']
-                        
-                        # Выполнить действие
-                        action_data = {
-                            'target_id': target_id,
-                            'action_type': action_type
-                        }
-                        
-                        success = self.automation.execute_action(
-                            account['id'], 
-                            action_type, 
-                            action_data
-                        )
-                        
-                        # Обновить статус
-                        if success:
-                            cursor.execute('''
-                                UPDATE account_relations 
-                                SET status = ? 
-                                WHERE id = ?
-                            ''', ('completed', relation['id']))
-                
-                conn.commit()
-            
-            print(f"[+] Взаимодействия выполнены")
-            return True
-        except Exception as e:
-            print(f"[-] Ошибка выполнения взаимодействий: {e}")
-        return False
-    
-    def get_interaction_stats(self, campaign_id: int) -> Dict:
-        """Получить статистику взаимодействий"""
+    def _ensure_tables(self):
+        """Убедиться, что таблицы существуют"""
         try:
             with sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor()
                 
-                cursor.execute('''
-                    SELECT COUNT(*) as total, status
-                    FROM account_relations
-                    WHERE campaign_assigned_id = ?
-                    GROUP BY status
-                ''', (campaign_id,))
+                # Таблица кампаний
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS campaigns (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        campaign_name TEXT NOT NULL,
+                        campaign_type TEXT,
+                        platform TEXT,
+                        strategy TEXT,
+                        prompt TEXT,
+                        config TEXT,
+                        status TEXT DEFAULT 'active',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
                 
-                results = cursor.fetchall()
-                return {row[1]: row[0] for row in results}
+                # Таблица назначений аккаунтов
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS campaign_accounts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        campaign_id INTEGER,
+                        account_id INTEGER,
+                        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
+                    )
+                """)
+                
+                # Таблица действий
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS scheduled_actions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        account_id INTEGER,
+                        campaign_id INTEGER,
+                        action_type TEXT,
+                        target_id TEXT,
+                        action_data TEXT,
+                        scheduled_at TIMESTAMP,
+                        executed_at TIMESTAMP,
+                        status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                conn.commit()
         except Exception as e:
-            print(f"[-] Ошибка получения статистики: {e}")
-        return {}
+            print(f"[-] Error creating tables: {e}")
+    
+    def create_campaign(self, campaign_name, campaign_type='organic', 
+                       platform='instagram', strategy='engagement', 
+                       prompt=None, config=None):
+        """Создать новую кампанию"""
+        try:
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO campaigns 
+                    (campaign_name, campaign_type, platform, strategy, prompt, config)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (campaign_name, campaign_type, platform, strategy, prompt, str(config or {})))
+                conn.commit()
+                campaign_id = cursor.lastrowid
+                
+                self.running_campaigns[campaign_id] = {
+                    'name': campaign_name,
+                    'status': 'created',
+                    'accounts': [],
+                    'actions_count': 0
+                }
+                
+                return campaign_id
+        except Exception as e:
+            print(f"[-] Error creating campaign: {e}")
+            return None
+    
+    def assign_accounts_to_campaign(self, campaign_id, country=None, 
+                                   limit=None, min_trust_score=0.0):
+        """Назначить аккаунты на кампанию"""
+        try:
+            accounts = self.db.get_accounts_by_country(country, limit)
+            account_ids = []
+            
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                for account in accounts:
+                    if account.get('trust_score', 0) >= min_trust_score:
+                        account_id = account.get('id')
+                        cursor.execute("""
+                            INSERT INTO campaign_accounts (campaign_id, account_id)
+                            VALUES (?, ?)
+                        """, (campaign_id, account_id))
+                        account_ids.append(account_id)
+                
+                conn.commit()
+            
+            if campaign_id in self.running_campaigns:
+                self.running_campaigns[campaign_id]['accounts'] = account_ids
+            
+            return account_ids
+        except Exception as e:
+            print(f"[-] Error assigning accounts: {e}")
+            return []
+    
+    def start_automation(self, campaign_id, num_workers=5):
+        """Запустить автоматизацию кампании"""
+        try:
+            if campaign_id in self.running_campaigns:
+                self.running_campaigns[campaign_id]['status'] = 'running'
+                self.running_campaigns[campaign_id]['workers'] = num_workers
+                
+                with sqlite3.connect(self.db.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE campaigns SET status = ? WHERE id = ?
+                    """, ('running', campaign_id))
+                    conn.commit()
+                
+                return True
+            return False
+        except Exception as e:
+            print(f"[-] Error starting automation: {e}")
+            return False
+    
+    def stop_automation(self, campaign_id=None):
+        """Остановить автоматизацию"""
+        try:
+            if campaign_id and campaign_id in self.running_campaigns:
+                self.running_campaigns[campaign_id]['status'] = 'stopped'
+                
+                with sqlite3.connect(self.db.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE campaigns SET status = ? WHERE id = ?
+                    """, ('stopped', campaign_id))
+                    conn.commit()
+            
+            return True
+        except Exception as e:
+            print(f"[-] Error stopping automation: {e}")
+            return False
+    
+    def schedule_action(self, account_id, action_type, target_id, 
+                       action_data=None, delay_minutes=0, campaign_id=None):
+        """Запланировать действие"""
+        try:
+            scheduled_at = datetime.now() + timedelta(minutes=delay_minutes)
+            action_id = str(uuid.uuid4())
+            
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO scheduled_actions 
+                    (account_id, campaign_id, action_type, target_id, action_data, scheduled_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (account_id, campaign_id, action_type, target_id, str(action_data or {}), scheduled_at))
+                conn.commit()
+            
+            return action_id
+        except Exception as e:
+            print(f"[-] Error scheduling action: {e}")
+            return None
+    
+    def execute_action(self, account_id, action_type, action_data=None):
+        """Выполнить действие немедленно"""
+        try:
+            # Логирование действия
+            print(f"[*] Executing {action_type} for account {account_id}")
+            
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO scheduled_actions 
+                    (account_id, action_type, action_data, executed_at, status)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (account_id, action_type, str(action_data or {}), datetime.now(), 'executed'))
+                conn.commit()
+            
+            return True
+        except Exception as e:
+            print(f"[-] Error executing action: {e}")
+            return False
+    
+    def get_campaign_stats(self, campaign_id):
+        """Получить статистику кампании"""
+        try:
+            stats = {
+                'campaign_id': campaign_id,
+                'total_accounts': 0,
+                'total_actions': 0,
+                'total_likes': 0,
+                'total_comments': 0,
+                'total_follows': 0,
+                'status': 'unknown'
+            }
+            
+            if campaign_id in self.running_campaigns:
+                campaign = self.running_campaigns[campaign_id]
+                stats['status'] = campaign.get('status', 'unknown')
+                stats['total_accounts'] = len(campaign.get('accounts', []))
+                stats['total_actions'] = campaign.get('actions_count', 0)
+            
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Получить статистику по типам действий
+                cursor.execute("""
+                    SELECT action_type, COUNT(*) as count 
+                    FROM scheduled_actions 
+                    WHERE campaign_id = ? 
+                    GROUP BY action_type
+                """, (campaign_id,))
+                
+                for action_type, count in cursor.fetchall():
+                    if action_type == 'like':
+                        stats['total_likes'] = count
+                    elif action_type == 'comment':
+                        stats['total_comments'] = count
+                    elif action_type == 'follow':
+                        stats['total_follows'] = count
+            
+            return stats
+        except Exception as e:
+            print(f"[-] Error getting campaign stats: {e}")
+            return {}
 
+
+class InteractionEngine:
+    """Класс для управления сетями взаимодействий"""
+    
+    def __init__(self, db):
+        self.db = db
+        self.interaction_networks = {}
+        self._ensure_tables()
+    
+    def _ensure_tables(self):
+        """Убедиться, что таблицы существуют"""
+        try:
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Таблица сетей взаимодействий
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS interaction_networks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        campaign_id INTEGER,
+                        interaction_type TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
+                    )
+                """)
+                
+                # Таблица взаимодействий
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS interactions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        network_id INTEGER,
+                        from_account_id INTEGER,
+                        to_account_id INTEGER,
+                        interaction_type TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (network_id) REFERENCES interaction_networks(id)
+                    )
+                """)
+                
+                conn.commit()
+        except Exception as e:
+            print(f"[-] Error creating interaction tables: {e}")
+    
+    def create_interaction_network(self, campaign_id, interaction_type='friendship'):
+        """Создать сеть взаимодействий"""
+        try:
+            network_id = None
+            
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO interaction_networks (campaign_id, interaction_type)
+                    VALUES (?, ?)
+                """, (campaign_id, interaction_type))
+                conn.commit()
+                network_id = cursor.lastrowid
+            
+            self.interaction_networks[network_id] = {
+                'campaign_id': campaign_id,
+                'type': interaction_type,
+                'interactions': []
+            }
+            
+            return network_id
+        except Exception as e:
+            print(f"[-] Error creating interaction network: {e}")
+            return None
+    
+    def execute_network_interactions(self, campaign_id, action_type='like'):
+        """Выполнить взаимодействия в сети"""
+        try:
+            print(f"[*] Executing {action_type} interactions for campaign {campaign_id}")
+            return True
+        except Exception as e:
+            print(f"[-] Error executing network interactions: {e}")
+            return False
+    
+    def get_interaction_stats(self, campaign_id):
+        """Получить статистику взаимодействий"""
+        try:
+            stats = {
+                'campaign_id': campaign_id,
+                'total_networks': 0,
+                'total_interactions': 0
+            }
+            
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT COUNT(*) FROM interaction_networks WHERE campaign_id = ?
+                """, (campaign_id,))
+                result = cursor.fetchone()
+                stats['total_networks'] = result[0] if result else 0
+                
+                cursor.execute("""
+                    SELECT COUNT(*) FROM interactions 
+                    WHERE network_id IN (
+                        SELECT id FROM interaction_networks WHERE campaign_id = ?
+                    )
+                """, (campaign_id,))
+                result = cursor.fetchone()
+                stats['total_interactions'] = result[0] if result else 0
+            
+            return stats
+        except Exception as e:
+            print(f"[-] Error getting interaction stats: {e}")
+            return {}

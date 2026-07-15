@@ -1,15 +1,6 @@
 {
   "facebook": {
-    "api_keys": [
-      {
-        "api_key": "882a8490361da98702bf97a021ddc14d",
-        "secret": "62f8ce9f74b12f84c123cc23437a4a32"
-      },
-      {
-        "api_key": "1310659166992829",
-        "secret": "0bc0b9660742359055276f9c6ac60caf"
-      }
-    ]
+    "api_keys": []
   },
   "settings": {
     "max_threads": 10,
