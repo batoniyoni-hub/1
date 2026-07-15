@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
+import os
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 import json
-import os
-from datetime import datetime, timedelta
 import threading
+from datetime import datetime, timedelta
+import sqlite3
 from account_database import AccountDatabase, AccountStatus
 from campaign_automation import CampaignAutomation, InteractionEngine, ActionType
 from proxy_manager import ProxyManager
@@ -12,6 +14,9 @@ from profile_generator import ProfileGenerator
 from multi_account_manager import MultiAccountManager
 import io
 from openpyxl import load_workbook
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
@@ -26,6 +31,10 @@ profile_gen = ProfileGenerator()
 # Глобальные переменные для отслеживания процессов
 running_campaigns = {}
 account_creation_progress = {}
+
+# Thread locks for thread-safe access
+running_campaigns_lock = threading.Lock()
+account_creation_progress_lock = threading.Lock()
 
 # ==================== DASHBOARD ROUTES ====================
 
@@ -166,14 +175,16 @@ def create_accounts():
         
         # Запустить создание в отдельном потоке
         progress_id = f"creation_{datetime.now().timestamp()}"
-        account_creation_progress[progress_id] = {
-            'status': 'running',
-            'count': count,
-            'created': 0,
-            'valid': 0,
-            'failed': 0,
-            'geo': geo
-        }
+        
+        with account_creation_progress_lock:
+            account_creation_progress[progress_id] = {
+                'status': 'running',
+                'count': count,
+                'created': 0,
+                'valid': 0,
+                'failed': 0,
+                'geo': geo
+            }
         
         def creation_worker():
             for i in range(count):
@@ -201,12 +212,18 @@ def create_accounts():
                     }
                     
                     manager.add_account(account_data)
-                    account_creation_progress[progress_id]['created'] += 1
-                    account_creation_progress[progress_id]['valid'] += 1
+                    
+                    with account_creation_progress_lock:
+                        if progress_id in account_creation_progress:
+                            account_creation_progress[progress_id]['created'] += 1
+                            account_creation_progress[progress_id]['valid'] += 1
                 except Exception as e:
-                    account_creation_progress[progress_id]['failed'] += 1
+                    with account_creation_progress_lock:
+                        if progress_id in account_creation_progress:
+                            account_creation_progress[progress_id]['failed'] += 1
         
         thread = threading.Thread(target=creation_worker)
+        thread.daemon = True
         thread.start()
         
         return jsonify({
@@ -221,7 +238,9 @@ def create_accounts():
 def get_creation_progress(progress_id):
     """Получить прогресс создания аккаунтов"""
     try:
-        progress = account_creation_progress.get(progress_id, {})
+        with account_creation_progress_lock:
+            progress = account_creation_progress.get(progress_id, {})
+        
         return jsonify({
             'success': True,
             'progress': progress
@@ -237,7 +256,6 @@ def get_campaigns():
     try:
         status = request.args.get('status', 'active')
         with db._lock:
-            import sqlite3
             with sqlite3.connect(db.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -316,11 +334,12 @@ def start_campaign(campaign_id):
         num_workers = request.json.get('num_workers', 5)
         
         if automation.start_automation(campaign_id, num_workers):
-            running_campaigns[campaign_id] = {
-                'status': 'running',
-                'started_at': datetime.now().isoformat(),
-                'workers': num_workers
-            }
+            with running_campaigns_lock:
+                running_campaigns[campaign_id] = {
+                    'status': 'running',
+                    'started_at': datetime.now().isoformat(),
+                    'workers': num_workers
+                }
             
             return jsonify({
                 'success': True,
@@ -334,9 +353,11 @@ def start_campaign(campaign_id):
 def stop_campaign(campaign_id):
     """Остановить кампанию"""
     try:
-        automation.stop_automation()
-        if campaign_id in running_campaigns:
-            del running_campaigns[campaign_id]
+        automation.stop_automation(campaign_id)
+        
+        with running_campaigns_lock:
+            if campaign_id in running_campaigns:
+                del running_campaigns[campaign_id]
         
         return jsonify({
             'success': True,
@@ -366,7 +387,7 @@ def create_interaction_network(campaign_id):
 def execute_interactions(campaign_id):
     """Выполнить взаимодействия"""
     try:
-        action_type = request.json.get('action_type', ActionType.LIKE)
+        action_type = request.json.get('action_type', ActionType.LIKE.value)
         
         if interaction_engine.execute_network_interactions(campaign_id, action_type):
             return jsonify({
@@ -401,7 +422,8 @@ def schedule_action():
             action_type=data.get('action_type'),
             target_id=data.get('target_id'),
             action_data=data.get('action_data', {}),
-            delay_minutes=data.get('delay_minutes', 0)
+            delay_minutes=data.get('delay_minutes', 0),
+            campaign_id=data.get('campaign_id')
         )
         
         return jsonify({
@@ -444,6 +466,7 @@ def refresh_proxies():
             proxy_mgr.refresh_proxies(geo, limit)
         
         thread = threading.Thread(target=refresh_worker)
+        thread.daemon = True
         thread.start()
         
         return jsonify({
@@ -521,11 +544,14 @@ def get_stats():
         stats = db.get_stats()
         proxy_stats = proxy_mgr.db.get_stats()
         
+        with running_campaigns_lock:
+            running_count = len(running_campaigns)
+        
         return jsonify({
             'success': True,
             'accounts': stats,
             'proxies': proxy_stats,
-            'running_campaigns': len(running_campaigns),
+            'running_campaigns': running_count,
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
@@ -548,4 +574,9 @@ if __name__ == '__main__':
     print("📊 API Server running on http://localhost:5000")
     print("="*60 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Read debug mode from environment variable
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    server_host = os.getenv('SERVER_HOST', '0.0.0.0')
+    server_port = int(os.getenv('SERVER_PORT', '5000'))
+    
+    app.run(debug=debug_mode, host=server_host, port=server_port)
