@@ -347,19 +347,107 @@ class MultiAccountManager:
         """Экспортировать валидные аккаунты"""
         if not output_file:
             output_file = f"valid_accounts_{self.date_str}.txt"
-        
+
         try:
             accounts = self.db.get_accounts_by_status('valid')
             with open(output_file, 'w', encoding='utf-8') as f:
                 for account in accounts:
                     f.write(f"{account['email']}:{account['account_password']}\n")
-            
+
             print(f"[+] Экспортировано {len(accounts)} аккаунтов в {output_file}")
             return output_file
         except Exception as e:
             print(f"[-] Ошибка экспорта: {e}")
         return None
-    
+
+    def export_accounts(self, status: str = 'valid', format_type: str = 'xlsx',
+                         output_file: str = None) -> Optional[str]:
+        """Экспорт аккаунтов в выбранном формате.
+
+        Поддерживает xlsx (используется текущий self.filename), json, csv, txt.
+        """
+        format_type = (format_type or 'xlsx').lower()
+        statuses = ['valid'] if status == 'valid' else None
+
+        if format_type == 'xlsx':
+            # Живой xlsx уже ведётся в self.wb; просто сохраняем финальный снимок.
+            output_file = output_file or self.filename
+            try:
+                self.wb.save(output_file)
+                print(f"[+] xlsx сохранён: {output_file}")
+                return output_file
+            except Exception as e:
+                print(f"[-] Ошибка экспорта xlsx: {e}")
+                return None
+
+        try:
+            accounts = (
+                self.db.get_accounts_by_status(status)
+                if statuses
+                else self.db.get_all_accounts() if hasattr(self.db, 'get_all_accounts') else []
+            )
+        except Exception as e:
+            print(f"[-] Ошибка чтения БД при экспорте: {e}")
+            return None
+
+        if not accounts:
+            print(f"[-] Нет аккаунтов со статусом '{status}' для экспорта")
+            return None
+
+        if format_type == 'txt':
+            output_file = output_file or f"accounts_{status}_{self.date_str}.txt"
+            try:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    for account in accounts:
+                        f.write(f"{account['email']}:{account['account_password']}\n")
+            except Exception as e:
+                print(f"[-] Ошибка экспорта txt: {e}")
+                return None
+            print(f"[+] Экспортировано {len(accounts)} аккаунтов в {output_file}")
+            return output_file
+
+        if format_type == 'json':
+            output_file = output_file or f"accounts_{status}_{self.date_str}.json"
+            try:
+                # Сериализуем поля, которые json не умеет (datetime) — превращаем в строку.
+                serializable = []
+                for account in accounts:
+                    row = {}
+                    for k, v in account.items():
+                        if hasattr(v, 'isoformat'):
+                            row[k] = v.isoformat()
+                        else:
+                            row[k] = v
+                    serializable.append(row)
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(serializable, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[-] Ошибка экспорта json: {e}")
+                return None
+            print(f"[+] Экспортировано {len(accounts)} аккаунтов в {output_file}")
+            return output_file
+
+        if format_type == 'csv':
+            output_file = output_file or f"accounts_{status}_{self.date_str}.csv"
+            try:
+                import csv
+                fieldnames = sorted({k for acc in accounts for k in acc.keys()})
+                with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for account in accounts:
+                        row = {k: (v.isoformat() if hasattr(v, 'isoformat') else v)
+                               for k, v in account.items()}
+                        writer.writerow(row)
+            except Exception as e:
+                print(f"[-] Ошибка экспорта csv: {e}")
+                return None
+            print(f"[+] Экспортировано {len(accounts)} аккаунтов в {output_file}")
+            return output_file
+
+        print(f"[-] Неизвестный формат экспорта: {format_type}")
+        return None
+
     def get_export_formats(self) -> Dict[str, str]:
         """Получить доступные форматы экспорта"""
         return {

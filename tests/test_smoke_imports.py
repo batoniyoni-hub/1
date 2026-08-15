@@ -12,7 +12,6 @@ PROJECT_MODULES = [
     "account_database",
     "api_dashboard",
     "campaign_automation",
-    "FB_Multi_Creator_v17",
     "main",
     "multi_account_manager",
     "profile_generator",

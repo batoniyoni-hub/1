@@ -220,18 +220,33 @@ class FBMultiCreator:
         print("Обновление БД прокси...")
         self.proxy_mgr.refresh_proxies(geo, limit=300)
         self.proxy_mgr.show_stats()
-    
+
     def menu_export(self):
         print("\n💾 ЭКСПОРТ АККАУНТОВ")
         status = input("Статус (valid/all): ").lower() or "valid"
         format_type = input("Формат (xlsx/json/csv/txt): ").lower() or "xlsx"
-        print(f"Экспорт {status} аккаунтов в формате {format_type}...")
-    
+        # Транзитный менеджер — нужен ради xlsx-экспорта; для остальных
+        # форматов данные читаются напрямую из БД.
+        manager = MultiAccountManager("XX", 0)
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_file = f"accounts_{status}_{date_str}.{format_type}"
+        result = manager.export_accounts(status=status, format_type=format_type,
+                                          output_file=output_file)
+        if result:
+            print(f"✅ Готово: {result}")
+        else:
+            print("[-] Экспорт не выполнен")
+
     def menu_web_dashboard(self):
         print("\n🌐 ВЕБ-ДАШБОРД")
         print("Запуск веб-дашборда на http://localhost:5000")
         print("Для остановки нажмите Ctrl+C")
-        os.system("python api_dashboard.py")
+        import subprocess
+        import sys
+        try:
+            subprocess.run([sys.executable, "api_dashboard.py"], check=False)
+        except KeyboardInterrupt:
+            print("\n[!] Остановка дашборда")
 
 def main():
     parser = argparse.ArgumentParser(description='FB Multi-Account Automation')

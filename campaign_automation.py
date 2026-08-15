@@ -36,23 +36,18 @@ class CampaignAutomation:
         try:
             with sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor()
-                
-                # Таблица кампаний
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS campaigns (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        campaign_name TEXT NOT NULL,
-                        campaign_type TEXT,
-                        platform TEXT,
-                        strategy TEXT,
-                        prompt TEXT,
-                        config TEXT,
-                        status TEXT DEFAULT 'active',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
+
+                # Таблица кампаний принадлежит AccountDatabase; убедимся, что
+                # он уже её создал, и домигрируем колонку `config` для старых БД,
+                # где кампании были созданы старой версией этой таблицы.
+                if hasattr(self.db, 'init_database'):
+                    self.db.init_database()
+
+                cursor.execute("PRAGMA table_info(campaigns)")
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if 'config' not in existing_cols:
+                    cursor.execute("ALTER TABLE campaigns ADD COLUMN config TEXT")
+
                 # Таблица назначений аккаунтов
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS campaign_accounts (

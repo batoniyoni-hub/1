@@ -82,7 +82,6 @@ python main.py --mode api
 ├── campaign_automation.py    # Автоматизация кампаний
 ├── multi_account_manager.py  # Менеджер аккаунтов
 ├── profile_generator.py      # Генератор профилей
-├── FB_Multi_Creator_v17.py   # Основной создатель
 └── requirements.txt          # Зависимости
 ```
 

@@ -66,3 +66,12 @@ exports/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent / harness artifacts
+.agents/
+.claude/
+.codex/
+.cursor/
+AGENTS.md
+.beads.gate.lock
+.beads.gate.lock.info

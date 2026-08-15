@@ -175,23 +175,24 @@ class AccountDatabase:
                     platform TEXT,
                     strategy TEXT,
                     prompt TEXT,
+                    config TEXT,
                     start_date TIMESTAMP,
                     end_date TIMESTAMP,
                     status TEXT DEFAULT 'active',
-                    
+
                     -- Параметры
                     daily_actions_limit INTEGER,
                     interaction_types TEXT,
                     target_audience TEXT,
                     content_template TEXT,
-                    
+
                     -- Статистика
                     total_accounts INTEGER DEFAULT 0,
                     total_actions INTEGER DEFAULT 0,
                     total_likes INTEGER DEFAULT 0,
                     total_comments INTEGER DEFAULT 0,
                     total_follows INTEGER DEFAULT 0,
-                    
+
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     notes TEXT
